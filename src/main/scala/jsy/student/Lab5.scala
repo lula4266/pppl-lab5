@@ -41,38 +41,64 @@ object Lab5 extends jsy.util.JsyApplication with Lab5Like {
       case N(_) | B(_) | Undefined | S(_) | Null | A(_) => doreturn(e)
       case Print(e1) => ren(env,e1) map { e1p => Print(e1p) }
 
-      case Unary(uop, e1) => ???
-      case Binary(bop, e1, e2) => ???
-      case If(e1, e2, e3) => ???
-
-      case Var(x) => ???
-
-      case Decl(m, x, e1, e2) => fresh(x) flatMap { xp =>
-        ???
+      case Unary(uop, e1) => ren(env,e1) map {e1p => Unary(uop,e1p)}
+      case Binary(bop, e1, e2) => ren(env,e1) flatMap{ e1p =>
+        ren(env,e2) map {e2p =>
+          Binary(bop,e1p,e2p)
+        }
+      }
+      case If(e1, e2, e3) => ren(env,e1) flatMap{ e1p =>
+        ren(env,e2) flatMap{ e2p =>
+        ren(env,e2) map { e3p =>
+          If(e1p,e2p,e3p)
+        }
+      }
       }
 
-      case Function(p, params, retty, e1) => {
-        val w: DoWith[W,(Option[String], Map[String,String])] = p match {
-          case None => ???
-          case Some(x) => ???
-        }
-        w flatMap { case (pp, envp) =>
-          params.foldRight[DoWith[W,(List[(String,MTyp)],Map[String,String])]]( doreturn((Nil, envp)) ) {
-            case ((x,mty), acc) => acc flatMap {
-              ???
-            }
-          } flatMap {
-            ???
+      case Var(x) => doreturn(Var(lookup(env,x)))
+
+      case Decl(m, x, e1, e2) => fresh(x) flatMap { xp =>
+        ren(extend(env,x,xp),e2) flatMap {
+          e2p => ren(extend(env,x,x),e1) map {
+            e1p => Decl(m,xp,e1p,e2p)
           }
         }
       }
 
-      case Call(e1, args) => ???
+      case Function(p, params, retty, e1) => {
+        val w: DoWith[W,(Option[String], Map[String,String])] = p match {
+          case None => doreturn(None,env)
+          case Some(x) => fresh(x) map {xp => (Some(xp),extend(env,x,xp))}
+        }
+        w flatMap { case (pp, envp) =>
+          params.foldRight[DoWith[W,(List[(String,MTyp)],Map[String,String])]]( doreturn((Nil, envp)) ) {
+            case ((x,mty), acc) => acc flatMap {
+              case (accL, accM) => fresh(x) map { xp => ((xp -> mty)::accL, extend(accM,x,xp))}
+            }
+          } flatMap {
+            case (paramsp,envpp) => ren(envpp,e1) map { e1p => Function(pp,paramsp,retty,e1p)}
+          }
+        }
+      }
 
-      case Obj(fields) => ???
-      case GetField(e1, f) => ???
+      case Call(e1, args) => args.foldRight[DoWith[W,List[Expr]]](doreturn(Nil)) {
+        (arg,acc) =>
+          acc flatMap {
+            accp => ren(env,arg) map {al => al::accp}
+          }
+      } flatMap {
+        argsp => ren(env,e1) map {e1p => Call(e1p,argsp)}
+      }
 
-      case Assign(e1, e2) => ???
+      case Obj(fields) => fields.foldRight[DoWith[W,Map[String,Expr]]](doreturn(Map.empty)){
+        (f, acc) =>
+          acc flatMap{
+            accp => ren(env,f._2) map {ep => extend(accp, f._1,ep)}
+          }
+      } map {fp => Obj(fp)}
+      case GetField(e1, f) => ren(env,e1) map {e1p => GetField(e1p,f)}
+
+      case Assign(e1, e2) => ren(env,e1) flatMap { e1p => ren(env,e2) map {e2p => Assign(e1p,e2p)}}
 
       /* Should not match: should have been removed */
       case InterfaceDecl(_, _, _) => throw new IllegalArgumentException("Gremlins: Encountered unexpected expression %s.".format(e))
@@ -82,9 +108,9 @@ object Lab5 extends jsy.util.JsyApplication with Lab5Like {
 
   def myuniquify(e: Expr): Expr = {
     val fresh: String => DoWith[Int,String] = { _ =>
-      ???
+      doget flatMap{ counter => doput(counter+1) map { _ => "x"+counter.toString}}
     }
-    val (_, r) = rename(empty, e)(fresh)(???)
+    val (_, r) = rename(empty, e)(fresh)(0)
     r
   }
 
@@ -92,22 +118,33 @@ object Lab5 extends jsy.util.JsyApplication with Lab5Like {
 
   // List map with an operator returning a DoWith
   def mapWith[W,A,B](l: List[A])(f: A => DoWith[W,B]): DoWith[W,List[B]] = {
-    l.foldRight[DoWith[W,List[B]]]( ??? ) {
-      ???
+    l.foldRight[DoWith[W,List[B]]]( doreturn(List()) ) {
+      (a,acc) => f(a) flatMap{
+        b => acc map{
+          l => b::l
+        }
+      }
     }
   }
 
   // Map map with an operator returning a DoWith
   def mapWith[W,A,B,C,D](m: Map[A,B])(f: ((A,B)) => DoWith[W,(C,D)]): DoWith[W,Map[C,D]] = {
-    m.foldRight[DoWith[W,Map[C,D]]]( ??? ) {
-      ???
+    m.foldRight[DoWith[W,Map[C,D]]]( doreturn(Map()) ) {
+      (a,acc) => f(a) flatMap{
+        c => acc map{
+          m => m+c
+        }
+      }
     }
   }
 
   // Just like mapFirst from Lab 4 but uses a callback f that returns a DoWith in the Some case.
   def mapFirstWith[W,A](l: List[A])(f: A => Option[DoWith[W,A]]): DoWith[W,List[A]] = l match {
-    case Nil => ???
-    case h :: t => ???
+    case Nil => doreturn(l)
+    case h :: t =>  f(h) match{
+      case Some(x) => x.map((x:A) => x::t)
+      case None => mapFirstWith(t)(f).map((x:List[A]) => h::x)
+    }
   }
 
   // There are better ways to deal with the combination of data structures like List, Map, and
@@ -117,7 +154,14 @@ object Lab5 extends jsy.util.JsyApplication with Lab5Like {
 
   def castOk(t1: Typ, t2: Typ): Boolean = (t1, t2) match {
       /***** Make sure to replace the case _ => ???. */
-    //case _ => ???
+    case (TNull, TObj(_)) => true
+    case (_,_) if t1 == t2 => true
+    case (TObj(f1), TObj(f2)) => f1.forall{
+      case (f,t) => f2.get(f) match {
+        case None => true
+        case Some(tp) => if(t == tp) true else false
+      }
+    }
       /***** Cases for the extra credit. Do not attempt until the rest of the assignment is complete. */
     case (TInterface(tvar, t1p), _) => ???
     case (_, TInterface(tvar, t2p)) => ???
@@ -132,11 +176,17 @@ object Lab5 extends jsy.util.JsyApplication with Lab5Like {
   // how library functions are used.
   def hasFunctionTyp(t: Typ): Boolean = t match {
     case TFunction(_, _) => true
-    case TObj(fields) if (fields exists { case (_, t) => hasFunctionTyp(t) }) => true
+    case TObj(fields) if (fields exists { case (_, typ) => hasFunctionTyp(typ) }) => true
     case _ => false
   }
 
-  def isBindex(m: Mode, e: Expr): Boolean = ???
+  def isBindex(m: Mode, e: Expr): Boolean = m match {
+    case MRef => isLExpr(e)
+    case MConst => true
+    case MName => true
+    case MVar => true
+    case _ => throw new UnsupportedOperationException
+  }
 
   def typeof(env: TEnv, e: Expr): Typ = {
     def err[T](tgot: Typ, e1: Expr): T = throw StaticTypeError(tgot, e1, e)
@@ -147,76 +197,108 @@ object Lab5 extends jsy.util.JsyApplication with Lab5Like {
       case B(_) => TBool
       case Undefined => TUndefined
       case S(_) => TString
-      case Var(x) => ???
+      case Var(x) => lookup(env,x).t
       case Unary(Neg, e1) => typeof(env, e1) match {
         case TNumber => TNumber
         case tgot => err(tgot, e1)
       }
         /***** Cases directly from Lab 4. We will minimize the test of these cases in Lab 5. */
-      case Unary(Not, e1) =>
-        ???
-      case Binary(Plus, e1, e2) =>
-        ???
-      case Binary(Minus|Times|Div, e1, e2) =>
-        ???
-      case Binary(Eq|Ne, e1, e2) =>
-        ???
-      case Binary(Lt|Le|Gt|Ge, e1, e2) =>
-        ???
-      case Binary(And|Or, e1, e2) =>
-        ???
-      case Binary(Seq, e1, e2) =>
-        ???
-      case If(e1, e2, e3) =>
-        ???
+      case Unary(Not, e1) => typeof(env,e1) match {
+        case TBool => TBool
+        case tgot => err(tgot,e1)
+      }
+      case Binary(Plus, e1, e2) => typeof(env,e1) match {
+        case TNumber => if (typeof(env,e2) == TNumber) TNumber else err(typeof(env,e2),e2)
+        case TString => if (typeof(env,e2) == TString) TString else err(typeof(env,e2),e2)
+        case tgot => err(tgot,e1)
+      }
+      case Binary(Minus|Times|Div, e1, e2) => typeof(env,e1) match {
+        case TNumber => if(typeof(env,e2) == TNumber) TNumber else err(typeof(env,e2),e2)
+        case tgot => err(tgot,e1)
+      }
+      case Binary(Eq|Ne, e1, e2) => if (hasFunctionTyp(typeof(env,e1))) err(typeof(env,e1),e1)
+      else if (hasFunctionTyp(typeof(env,e2))) err(typeof(env,e2),e2)
+      else if (typeof(env,e1) == typeof(env,e2)) TBool else err(typeof(env,e2),e2)
+      case Binary(Lt|Le|Gt|Ge, e1, e2) => typeof(env,e1) match {
+        case TNumber => if (typeof(env,e2) == TNumber) TBool else err(typeof(env,e2),e2)
+        case TString => if(typeof(env,e2) == TString) TString else err(typeof(env,e2),e2)
+        case tgot => err(tgot,e1)
+      }
+      case Binary(And|Or, e1, e2) => typeof(env,e1) match {
+        case TBool => if (typeof(env,e2) == TBool) TBool else err(typeof(env,e2),e2)
+        case tgot => err(tgot,e1)
+      }
 
-      case Obj(fields) =>
-        ???
-      case GetField(e1, f) =>
-        ???
+      case Binary(Seq, e1, e2) =>
+        typeof(env,e1)
+        typeof(env,e2)
+
+      case If(e1, e2, e3) => typeof(env,e1) match {
+        case TBool => if(typeof(env,e2) == typeof(env,e3)) typeof(env,e2) else err(typeof(env,e3),e3)
+        case tgot => err(tgot,e1)
+      }
+
+      case Obj(fields) => TObj(fields.map( { case (s,ei) => (s, typeof(env,ei))}))
+
+      case GetField(e1, f) => typeof(env,e1) match {
+        case TObj(fields) => fields.get(f) match {
+          case Some(x) => x
+          case None => err(typeof(env,e1),e1)
+        }
+        case tgot => err(tgot,e1)
+      }
 
         /***** Cases from Lab 4 that need a small amount of adapting. */
-      case Decl(m, x, e1, e2) =>
-        ???
+      case Decl(m, x, e1, e2) => if (isBindex(m,e1)) typeof(extend(env,x,MTyp(m,typeof(env,e1))),e2)
+        else err(typeof(env,e1),e1)
+
       case Function(p, params, tann, e1) => {
         // Bind to env1 an environment that extends env with an appropriate binding if
         // the function is potentially recursive.
         val env1 = (p, tann) match {
           case (Some(f), Some(tret)) =>
             val tprime = TFunction(params, tret)
-            ???
+            extend(env,f, MTyp(MConst,tprime))
           case (None, _) => env
           case _ => err(TUndefined, e1)
         }
         // Bind to env2 an environment that extends env1 with bindings for params.
-        val env2 = ???
+        val env2 = params.foldLeft(env1) { case (acc, (xi,mi)) => extend(acc, xi, MTyp(mi.m, mi.t))}
         // Match on whether the return type is specified.
         tann match {
-          case None => ???
-          case Some(tret) => ???
+          case None => TFunction(params,typeof(env2,e1))
+          case Some(tret) => if (TFunction(params,typeof(env2,e1)) == TFunction(params,tret)) TFunction(params,tret)
+            else err(typeof(env2,e1),e1)
         }
       }
       case Call(e1, args) => typeof(env, e1) match {
         case TFunction(params, tret) if (params.length == args.length) =>
           (params, args).zipped.foreach {
-            ???
+            case ((_, m), ei) =>
+              if(m.t == typeof(env,ei) || isBindex(m.m, e1)) typeof(env,ei) else err(typeof(env,ei),ei)
           }
           tret
         case tgot => err(tgot, e1)
       }
 
         /***** New cases for Lab 5. ***/
-      case Assign(Var(x), e1) =>
-        ???
-      case Assign(GetField(e1, f), e2) =>
-        ???
+      case Assign(Var(x), e1) => lookup(env,x) match {
+        case MTyp(MVar,t) if (typeof(env,e1) == t) => t
+        case MTyp(MRef,t) if (typeof(env,e1) == t) => t
+        case _ => err(typeof(env,e1),e1)
+      }
+      case Assign(GetField(e1, f), e2) => typeof(env,e1) match {
+        case TObj(field) => field.get(f) match {
+          case Some(x) if (typeof(env,e2) == x) => x
+          case _ => err(typeof(env,e2),e2)
+        }
+      }
       case Assign(_, _) => err(TUndefined, e)
 
-      case Null =>
-        ???
+      case Null => TNull
 
       case Unary(Cast(t), e1) => typeof(env, e1) match {
-        case tgot if ??? => ???
+        case tgot if castOk(tgot,t) => tgot
         case tgot => err(tgot, e1)
       }
 
